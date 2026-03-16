@@ -1,9 +1,7 @@
 import io
 import json
-import math
 import os
 import re
-import shutil
 import uuid
 import zipfile
 from datetime import datetime
@@ -15,6 +13,7 @@ import numpy as np
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from PIL import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps
 from reportlab.lib.pagesizes import letter
@@ -34,7 +33,8 @@ for directory in [DATA_DIR, DOWNLOAD_DIR, EXTRACTED_DIR, BUNDLES_DIR]:
 if not BUNDLE_INDEX.exists():
     BUNDLE_INDEX.write_text("{}", encoding="utf-8")
 
-app = FastAPI(title=APP_NAME, version="1.0.0")
+app = FastAPI(title=APP_NAME, version="1.1.0")
+app.mount("/static", StaticFiles(directory=BASE_DIR / "app" / "static"), name="static")
 
 
 class SearchSourcesRequest(BaseModel):
@@ -100,7 +100,7 @@ def _download_file(url: str, target_dir: Path) -> Path:
     fname = url.split("?")[0].split("/")[-1] or f"download-{uuid.uuid4().hex}"
     destination = target_dir / fname
 
-    with requests.get(url, timeout=45, stream=True) as response:
+    with requests.get(url, timeout=60, stream=True) as response:
         response.raise_for_status()
         with destination.open("wb") as handle:
             for chunk in response.iter_content(chunk_size=1024 * 128):
@@ -216,8 +216,7 @@ def _thumbnail(image: Image.Image, max_size: Tuple[int, int] = (360, 360)) -> Im
 def _estimate_text_density(gray: Image.Image) -> float:
     arr = np.array(gray)
     edges = np.abs(np.diff(arr.astype(np.int16), axis=1))
-    tiny_transitions = (edges > 25).mean()
-    return float(tiny_transitions)
+    return float((edges > 25).mean())
 
 
 def _plate_score(image: Image.Image) -> Dict[str, float]:
@@ -231,8 +230,7 @@ def _plate_score(image: Image.Image) -> Dict[str, float]:
     edge_density = float(((edges_x > 18).mean() + (edges_y > 18).mean()) / 2.0)
 
     flipped = np.fliplr(arr)
-    h, w = arr.shape
-    overlap_w = min(w, flipped.shape[1])
+    overlap_w = min(arr.shape[1], flipped.shape[1])
     radial_symmetry = 1.0 - float(np.mean(np.abs(arr[:, :overlap_w] - flipped[:, :overlap_w])) / 255.0)
 
     text_density = _estimate_text_density(gray)
@@ -252,9 +250,7 @@ def _crop_margins(image: Image.Image) -> Image.Image:
     bg = Image.new(image.mode, image.size, image.getpixel((0, 0)))
     diff = ImageChops.difference(image, bg)
     bbox = diff.getbbox()
-    if bbox:
-        return image.crop(bbox)
-    return image
+    return image.crop(bbox) if bbox else image
 
 
 def _remove_border_artifacts(image: Image.Image, border: int = 8) -> Image.Image:
@@ -335,8 +331,8 @@ def _extract_pdf_pages(pdf_path: Path, page_numbers: Optional[List[int]], run_di
         page = doc.load_page(pno - 1)
         pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
         img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-        info = _plate_score(img)
-        scored.append((pno, img, info["score"]))
+        score = _plate_score(img)["score"]
+        scored.append((pno, img, score))
 
     if not page_numbers:
         scored = sorted(scored, key=lambda x: x[2], reverse=True)[:max_auto_pages]
@@ -355,7 +351,6 @@ def _extract_pdf_pages(pdf_path: Path, page_numbers: Optional[List[int]], run_di
                 score=score,
             )
         )
-
     return output
 
 
@@ -373,6 +368,12 @@ def _extract_image_urls(image_urls: List[str], run_dir: Path) -> List[ExtractedP
     return output
 
 
+
+@app.get("/")
+def home():
+    return FileResponse(BASE_DIR / "app" / "static" / "index.html")
+
+
 @app.post("/health")
 def health() -> dict:
     return {"status": "ok", "service": APP_NAME}
@@ -387,16 +388,12 @@ def search_sources(payload: SearchSourcesRequest) -> List[SearchResultItem]:
     if "internet_archive" in archives:
         results.extend(_internet_archive_search(payload.query, payload.year_start, payload.year_end, payload.limit))
 
-    if not results:
-        return []
-
     unique = {}
     for item in results:
         key = f"{item['source']}::{item['item_id']}"
         unique[key] = item
 
-    deduped = list(unique.values())[: payload.limit]
-    return [SearchResultItem(**item) for item in deduped]
+    return [SearchResultItem(**item) for item in list(unique.values())[: payload.limit]]
 
 
 @app.post("/extract_pages", response_model=List[ExtractedPage])
@@ -426,12 +423,7 @@ def build_bundle(payload: BuildBundleRequest) -> dict:
     masters_dir = bundle_dir / "Masters"
     preview_dir = bundle_dir / "Preview"
 
-    ratio_map = {
-        "2x3": (2, 3),
-        "3x4": (3, 4),
-        "4x5": (4, 5),
-        "11x14": (11, 14),
-    }
+    ratio_map = {"2x3": (2, 3), "3x4": (3, 4), "4x5": (4, 5), "11x14": (11, 14)}
 
     for folder in [masters_dir, preview_dir, *(bundle_dir / f"Print_{r}" for r in payload.print_ratios)]:
         folder.mkdir(parents=True, exist_ok=True)
@@ -439,16 +431,20 @@ def build_bundle(payload: BuildBundleRequest) -> dict:
     source_paths: List[Path] = []
     if payload.extracted_page_paths:
         source_paths.extend(Path(p) for p in payload.extracted_page_paths)
-
     if payload.source_urls:
         dl_dir = bundle_root / "source_downloads"
         for url in payload.source_urls:
             source_paths.append(_download_file(url, dl_dir))
 
+    if not source_paths:
+        raise HTTPException(status_code=400, detail="No source images resolved")
+
     master_images: List[Path] = []
     for idx, src in enumerate(source_paths, start=1):
-        img = Image.open(src).convert("RGB")
+        if not src.exists():
+            raise HTTPException(status_code=400, detail=f"Source path not found: {src}")
 
+        img = Image.open(src).convert("RGB")
         if payload.cleanup_flags.get("crop_margins", True):
             img = _crop_margins(img)
         if payload.cleanup_flags.get("remove_border_artifacts", True):
@@ -462,18 +458,15 @@ def build_bundle(payload: BuildBundleRequest) -> dict:
         img.save(master_path, quality=96)
         master_images.append(master_path)
 
-        prev = _thumbnail(img, (1200, 1200))
-        prev.save(preview_dir / f"preview_{idx:03d}.jpg", quality=88)
+        _thumbnail(img, (1200, 1200)).save(preview_dir / f"preview_{idx:03d}.jpg", quality=88)
 
         for ratio in payload.print_ratios:
             if ratio not in ratio_map:
                 continue
             rw, rh = ratio_map[ratio]
-            out = _resize_and_crop(img, rw, rh)
-            out.save(bundle_dir / f"Print_{ratio}" / f"print_{ratio}_{idx:03d}.jpg", quality=96)
+            _resize_and_crop(img, rw, rh).save(bundle_dir / f"Print_{ratio}" / f"print_{ratio}_{idx:03d}.jpg", quality=96)
 
     _write_print_guide(bundle_dir, payload.bundle_name, len(master_images), payload.print_ratios)
-
     zip_path = bundle_root / f"{bundle_base_name}.zip"
     _zip_folder(bundle_dir, zip_path)
 
@@ -485,11 +478,7 @@ def build_bundle(payload: BuildBundleRequest) -> dict:
     }
     _save_bundle_index(index)
 
-    return {
-        "bundle_id": bundle_id,
-        "local_path": str(zip_path),
-        "download_url": f"/bundle/{bundle_id}",
-    }
+    return {"bundle_id": bundle_id, "local_path": str(zip_path), "download_url": f"/bundle/{bundle_id}"}
 
 
 @app.get("/bundle/{bundle_id}")
@@ -497,9 +486,7 @@ def get_bundle(bundle_id: str):
     index = _load_bundle_index()
     if bundle_id not in index:
         raise HTTPException(status_code=404, detail="Bundle not found")
-
     zip_path = Path(index[bundle_id]["zip_path"])
     if not zip_path.exists():
         raise HTTPException(status_code=404, detail="Bundle file missing")
-
     return FileResponse(zip_path, filename=zip_path.name, media_type="application/zip")

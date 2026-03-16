@@ -1,179 +1,207 @@
 # pd-asset-pipeline
 
-Production-ready FastAPI service for a Custom GPT Action that finds public-domain archive content and turns extracted pages into sale-ready print bundles.
+A FastAPI service + simple web UI that turns public-domain archive pages into sale-ready digital print bundles.
 
-## What this service does
+## Features
 
-- `POST /health` – basic status check.
-- `POST /search_sources` – searches Biodiversity Heritage Library (BHL) and Internet Archive metadata.
-- `POST /extract_pages` – downloads a PDF or image URLs and extracts page images + thumbnails.
-- `POST /build_bundle` – applies cleanup pipeline and generates print-ready folders + `Print_Guide.pdf` + final ZIP.
-- `GET /bundle/{bundle_id}` – downloads generated ZIP.
+- `POST /health`
+- `POST /search_sources` (BHL + Internet Archive)
+- `POST /extract_pages` (PDF URL or image URLs)
+- `POST /build_bundle` (cleanup + print exports + ZIP)
+- `GET /bundle/{bundle_id}` (download ZIP)
+- Beginner web UI at `/` for end-to-end workflow
 
-### Bundle folder structure
+## Exact beginner Chromebook Linux run steps
 
-```text
-Bundle_Name/
-  Masters/
-  Print_2x3/
-  Print_3x4/
-  Print_4x5/
-  Print_11x14/
-  Preview/
-  Print_Guide.pdf
-```
-
-## Tech stack
-
-- FastAPI
-- Pillow
-- PyMuPDF
-- requests
-- reportlab
-
-## Quick start (Chromebook + Linux)
-
-> Works in Linux terminal on Chromebook (Crostini) and standard Linux distributions.
-
-### 1) Clone and enter project
+1. **Enable Linux on Chromebook** (Settings → Developers → Linux development environment).
+2. Open Linux Terminal and run:
 
 ```bash
-git clone <your-repo-url> pd-asset-pipeline
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip git curl jq
+```
+
+3. Clone and enter project:
+
+```bash
+git clone <YOUR_REPO_URL> pd-asset-pipeline
 cd pd-asset-pipeline
 ```
 
-### 2) Create virtual environment
+4. Create/activate virtual environment:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3) Install dependencies
+5. Install Python packages:
 
 ```bash
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-### 4) Configure environment
+6. Optional env setup:
 
 ```bash
 cp .env.example .env
-# Optional: add BHL_API_KEY in .env
+# Add BHL_API_KEY if you have one
 ```
 
-### 5) Run server
+7. Start server:
 
 ```bash
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Open docs at: `http://localhost:8000/docs`
+8. Open:
+- Web UI: `http://localhost:8000/`
+- Swagger docs: `http://localhost:8000/docs`
 
-## Docker run
+---
 
-```bash
-docker build -t pd-asset-pipeline .
-docker run --rm -p 8000:8000 --env-file .env pd-asset-pipeline
-```
+## Real working sample using archive.org foraminifera PDF
 
-## API examples
+Source used:
+`https://archive.org/download/foraminiferathei00cush/foraminiferathei00cush.pdf`
 
-### Health check
-
-```bash
-curl -X POST http://localhost:8000/health
-```
-
-### Search sources
+### 1) Extract pages
 
 ```bash
-curl -X POST http://localhost:8000/search_sources \
+curl -sS -X POST http://localhost:8000/extract_pages \
   -H 'Content-Type: application/json' \
-  -d '{
-    "query": "diatom atlas",
-    "archive": ["bhl", "internet_archive"],
-    "year_start": 1800,
-    "year_end": 1930,
-    "limit": 8
-  }'
+  --data @samples/foraminifera_extract.json \
+  | tee /tmp/extract.json
 ```
 
-### Extract pages from PDF
+### 2) Build bundle from extracted page paths
 
 ```bash
-curl -X POST http://localhost:8000/extract_pages \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "pdf_url": "https://example.org/archive-book.pdf",
-    "page_numbers": [12, 15, 18]
-  }'
+jq -n --arg name "Foraminifera_Real_Bundle" \
+  --argjson paths "$(jq '[.[].image_path]' /tmp/extract.json)" \
+  '{bundle_name:$name, extracted_page_paths:$paths, print_ratios:["2x3","3x4","4x5","11x14"], cleanup_flags:{crop_margins:true,remove_border_artifacts:true,autocontrast:true,sharpen_line_art:true}}' \
+  | curl -sS -X POST http://localhost:8000/build_bundle \
+      -H 'Content-Type: application/json' \
+      -d @- | tee /tmp/build.json
 ```
 
-### Auto-detect likely plates (when page_numbers omitted)
-
-The service scores pages with heuristics tuned for scientific plate detection:
-
-- radial symmetry
-- edge density
-- contrast
-- low text density
-
-Highest scoring pages are returned first.
-
-### Build bundle from extracted pages
+### 3) Download generated ZIP
 
 ```bash
-curl -X POST http://localhost:8000/build_bundle \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "bundle_name": "Diatom_Plate_Set_01",
-    "extracted_page_paths": [
-      "data/extracted/<run_id>/page_0012.jpg",
-      "data/extracted/<run_id>/page_0015.jpg"
-    ],
-    "print_ratios": ["2x3", "3x4", "4x5", "11x14"],
-    "cleanup_flags": {
-      "crop_margins": true,
-      "remove_border_artifacts": true,
-      "autocontrast": true,
-      "sharpen_line_art": true
-    }
-  }'
+BUNDLE_ID=$(jq -r '.bundle_id' /tmp/build.json)
+curl -L "http://localhost:8000/bundle/${BUNDLE_ID}" --output Foraminifera_Real_Bundle.zip
 ```
 
-Response includes:
+---
 
-- `bundle_id`
-- `local_path`
-- `download_url`
+## Simple frontend web page
 
-### Download bundle zip
+The app ships a basic UI at `/` with:
+- Source URL input
+- Optional page selection
+- Bundle name input
+- **Build Bundle** button
+- Download link for generated ZIP
+
+File: `app/static/index.html`
+
+---
+
+## Deployment (Render)
+
+1. Push this repo to GitHub.
+2. In Render: **New +** → **Web Service**.
+3. Connect repo.
+4. Set:
+   - Runtime: Python 3
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+5. Add env vars (optional): `BHL_API_KEY`.
+6. Deploy.
+7. Confirm health:
 
 ```bash
-curl -L http://localhost:8000/bundle/<bundle_id> --output bundle.zip
+curl -X POST https://YOUR-RENDER-URL/health
 ```
 
-## Sample foraminifera/diatom command
+## Deployment (Railway)
 
-Sample payload: `samples/foraminifera_bundle.json`
+1. Push repo to GitHub.
+2. In Railway: **New Project** → **Deploy from GitHub repo**.
+3. Add service variables if needed (`BHL_API_KEY`).
+4. Railway auto-detects Python.
+5. Start command:
 
 ```bash
-curl -X POST http://localhost:8000/build_bundle \
-  -H 'Content-Type: application/json' \
-  --data @samples/foraminifera_bundle.json
+uvicorn app.main:app --host 0.0.0.0 --port $PORT
 ```
 
-## Custom GPT Action schema
+6. Deploy and test:
 
-Use: `schemas/custom_gpt_action_openapi.json`
+```bash
+curl -X POST https://YOUR-RAILWAY-URL/health
+```
 
-- Import this file in your Custom GPT Action config.
-- Set server URL to your deployed API base URL.
+---
 
-## Notes for beginners
+## Exact ngrok instructions (local testing + GPT Action)
 
-- All generated files are under `data/`.
-- If you only have image URLs, use `/extract_pages` with `image_urls`.
-- If you have a PDF, `/extract_pages` can extract explicit pages or auto-choose plate-like pages.
-- `/build_bundle` can accept local extracted paths directly.
+1. Install ngrok and authenticate once:
+
+```bash
+ngrok config add-authtoken <YOUR_NGROK_TOKEN>
+```
+
+2. Run API locally:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+3. In a second terminal, expose it:
+
+```bash
+ngrok http 8000
+```
+
+4. Copy HTTPS forwarding URL (example):
+`https://abc123.ngrok-free.app`
+
+5. Verify:
+
+```bash
+curl -X POST https://abc123.ngrok-free.app/health
+```
+
+---
+
+## Custom GPT Action schema and import steps
+
+Schema file: `schemas/custom_gpt_action_openapi.json`
+
+### Import steps
+
+1. Deploy API (Render/Railway/ngrok).
+2. Open schema file.
+3. Replace server URLs with your deployed HTTPS URL.
+4. In ChatGPT GPT Builder:
+   - Go to **Configure** → **Actions** → **Import from OpenAPI**.
+   - Paste schema JSON.
+5. Save action.
+6. Test actions in this order:
+   - `health`
+   - `extractPages` (foraminifera sample)
+   - `buildBundle`
+   - `downloadBundle`
+
+---
+
+## Project files
+
+- `app/main.py` – API + processing pipeline
+- `app/static/index.html` – simple frontend
+- `schemas/custom_gpt_action_openapi.json` – action schema
+- `samples/foraminifera_extract.json` – real extraction sample
+- `samples/foraminifera_bundle.json` – build options sample
+- `requirements.txt` / `Dockerfile` / `.env.example`

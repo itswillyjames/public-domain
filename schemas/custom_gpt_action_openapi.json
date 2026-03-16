@@ -2,13 +2,12 @@
   "openapi": "3.1.0",
   "info": {
     "title": "pd-asset-pipeline",
-    "version": "1.0.0",
-    "description": "FastAPI backend for turning public-domain archive pages into print-ready digital bundles."
+    "version": "1.1.0",
+    "description": "Custom GPT Action backend for searching public-domain sources, extracting pages, and building print-ready ZIP bundles."
   },
   "servers": [
-    {
-      "url": "http://localhost:8000"
-    }
+    { "url": "https://YOUR-RENDER-OR-RAILWAY-URL" },
+    { "url": "https://YOUR-NGROK-SUBDOMAIN.ngrok-free.app" }
   ],
   "paths": {
     "/health": {
@@ -23,8 +22,8 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "status": {"type": "string"},
-                    "service": {"type": "string"}
+                    "status": { "type": "string" },
+                    "service": { "type": "string" }
                   },
                   "required": ["status", "service"]
                 }
@@ -37,27 +36,23 @@
     "/search_sources": {
       "post": {
         "operationId": "searchSources",
-        "summary": "Search BHL and Internet Archive metadata",
+        "summary": "Search BHL and Internet Archive",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SearchSourcesRequest"
-              }
+              "schema": { "$ref": "#/components/schemas/SearchSourcesRequest" }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Candidate source items",
+            "description": "Search results",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/SearchResultItem"
-                  }
+                  "items": { "$ref": "#/components/schemas/SearchResultItem" }
                 }
               }
             }
@@ -68,27 +63,27 @@
     "/extract_pages": {
       "post": {
         "operationId": "extractPages",
-        "summary": "Extract pages from PDF or direct image URLs",
+        "summary": "Extract pages from PDF URL or image URLs",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ExtractPagesRequest"
+              "schema": { "$ref": "#/components/schemas/ExtractPagesRequest" },
+              "example": {
+                "pdf_url": "https://archive.org/download/foraminiferathei00cush/foraminiferathei00cush.pdf",
+                "page_numbers": [12, 13, 14]
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Extracted image files",
+            "description": "Extracted page files",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ExtractedPage"
-                  }
+                  "items": { "$ref": "#/components/schemas/ExtractedPage" }
                 }
               }
             }
@@ -99,14 +94,12 @@
     "/build_bundle": {
       "post": {
         "operationId": "buildBundle",
-        "summary": "Generate cleaned image set + print folders + zip",
+        "summary": "Build print-ready ZIP bundle",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/BuildBundleRequest"
-              }
+              "schema": { "$ref": "#/components/schemas/BuildBundleRequest" }
             }
           }
         },
@@ -118,9 +111,9 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "bundle_id": {"type": "string"},
-                    "local_path": {"type": "string"},
-                    "download_url": {"type": "string"}
+                    "bundle_id": { "type": "string" },
+                    "local_path": { "type": "string" },
+                    "download_url": { "type": "string" }
                   },
                   "required": ["bundle_id", "local_path", "download_url"]
                 }
@@ -133,19 +126,17 @@
     "/bundle/{bundle_id}": {
       "get": {
         "operationId": "downloadBundle",
-        "summary": "Download bundle ZIP",
+        "summary": "Download ZIP by bundle ID",
         "parameters": [
           {
             "name": "bundle_id",
             "in": "path",
             "required": true,
-            "schema": {"type": "string"}
+            "schema": { "type": "string" }
           }
         ],
         "responses": {
-          "200": {
-            "description": "ZIP file"
-          }
+          "200": { "description": "ZIP file" }
         }
       }
     }
@@ -155,63 +146,75 @@
       "SearchSourcesRequest": {
         "type": "object",
         "properties": {
-          "query": {"type": "string"},
+          "query": { "type": "string" },
           "archive": {
             "type": "array",
-            "items": {"type": "string", "enum": ["bhl", "internet_archive"]},
+            "items": { "type": "string", "enum": ["bhl", "internet_archive"] },
             "default": ["bhl", "internet_archive"]
           },
-          "year_start": {"type": "integer"},
-          "year_end": {"type": "integer"},
-          "limit": {"type": "integer", "default": 10}
+          "year_start": { "type": "integer" },
+          "year_end": { "type": "integer" },
+          "limit": { "type": "integer", "default": 10 }
         },
         "required": ["query"]
       },
       "SearchResultItem": {
         "type": "object",
         "properties": {
-          "title": {"type": "string"},
-          "author": {"type": ["string", "null"]},
-          "year": {"type": ["integer", "null"]},
-          "source": {"type": "string"},
-          "source_url": {"type": "string"},
-          "item_id": {"type": "string"}
+          "title": { "type": "string" },
+          "author": { "type": ["string", "null"] },
+          "year": { "type": ["integer", "null"] },
+          "source": { "type": "string" },
+          "source_url": { "type": "string" },
+          "item_id": { "type": "string" }
         },
         "required": ["title", "source", "source_url", "item_id"]
       },
       "ExtractPagesRequest": {
         "type": "object",
         "properties": {
-          "pdf_url": {"type": "string"},
-          "image_urls": {"type": "array", "items": {"type": "string"}},
-          "page_numbers": {"type": "array", "items": {"type": "integer"}},
-          "max_auto_pages": {"type": "integer", "default": 8}
+          "pdf_url": { "type": "string" },
+          "image_urls": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "page_numbers": {
+            "type": "array",
+            "items": { "type": "integer" }
+          },
+          "max_auto_pages": { "type": "integer", "default": 8 }
         }
       },
       "ExtractedPage": {
         "type": "object",
         "properties": {
-          "page_number": {"type": "integer"},
-          "image_path": {"type": "string"},
-          "thumbnail_path": {"type": "string"},
-          "score": {"type": ["number", "null"]}
+          "page_number": { "type": "integer" },
+          "image_path": { "type": "string" },
+          "thumbnail_path": { "type": "string" },
+          "score": { "type": ["number", "null"] }
         },
         "required": ["page_number", "image_path", "thumbnail_path"]
       },
       "BuildBundleRequest": {
         "type": "object",
         "properties": {
-          "bundle_name": {"type": "string"},
-          "source_urls": {"type": "array", "items": {"type": "string"}},
-          "extracted_page_paths": {"type": "array", "items": {"type": "string"}},
+          "bundle_name": { "type": "string" },
+          "source_urls": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "extracted_page_paths": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
           "print_ratios": {
             "type": "array",
-            "items": {"type": "string", "enum": ["2x3", "3x4", "4x5", "11x14"]},
+            "items": { "type": "string", "enum": ["2x3", "3x4", "4x5", "11x14"] },
             "default": ["2x3", "3x4", "4x5", "11x14"]
           },
           "cleanup_flags": {
             "type": "object",
-            "additionalProperties": {"type": "boolean"}
+            "additionalProperties": { "type": "boolean" }
           }
         },
         "required": ["bundle_name"]
