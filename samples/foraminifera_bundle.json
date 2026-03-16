@@ -1,0 +1,14 @@
+{
+  "bundle_name": "Foraminifera_Plate_Sample",
+  "source_urls": [
+    "https://example.org/foraminifera_plate_01.jpg",
+    "https://example.org/foraminifera_plate_02.jpg"
+  ],
+  "print_ratios": ["2x3", "3x4", "4x5", "11x14"],
+  "cleanup_flags": {
+    "crop_margins": true,
+    "remove_border_artifacts": true,
+    "autocontrast": true,
+    "sharpen_line_art": true
+  }
+}
