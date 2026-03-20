@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>pd-asset-pipeline</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 820px; margin: 24px auto; padding: 0 16px; }
+    h1 { margin-bottom: 8px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; font-weight: 600; margin-top: 8px; }
+    input, textarea, button { width: 100%; padding: 10px; margin-top: 6px; box-sizing: border-box; }
+    button { cursor: pointer; background: #1f6feb; color: white; border: none; border-radius: 6px; font-weight: 700; }
+    .muted { color: #666; font-size: 0.95rem; }
+    .ok { color: #0a7a2f; }
+    .err { color: #c22525; }
+    code { background: #f3f4f6; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>pd-asset-pipeline</h1>
+  <p class="muted">Create a sale-ready bundle from a public-domain archive PDF.</p>
+
+  <div class="card">
+    <label for="pdfUrl">Source PDF URL</label>
+    <input id="pdfUrl" value="https://archive.org/download/foraminiferathei00cush/foraminiferathei00cush.pdf" />
+
+    <label for="pages">Optional page numbers (comma-separated, e.g. 12,15,18)</label>
+    <input id="pages" placeholder="Leave blank to auto-detect likely plates" />
+
+    <label for="bundleName">Bundle name</label>
+    <input id="bundleName" value="Foraminifera_Plate_Bundle" />
+
+    <button id="buildBtn">Build Bundle</button>
+    <p id="status" class="muted"></p>
+    <div id="result"></div>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
+
+    function parsePages(raw) {
+      const cleaned = raw.trim();
+      if (!cleaned) return null;
+      return cleaned.split(',').map(s => Number(s.trim())).filter(n => Number.isInteger(n) && n > 0);
+    }
+
+    async function buildBundle() {
+      const pdfUrl = document.getElementById('pdfUrl').value.trim();
+      const pagesRaw = document.getElementById('pages').value;
+      const bundleName = document.getElementById('bundleName').value.trim() || 'PD_Bundle';
+      const pageNumbers = parsePages(pagesRaw);
+
+      if (!pdfUrl) {
+        statusEl.textContent = 'Please enter a PDF URL.';
+        statusEl.className = 'err';
+        return;
+      }
+
+      resultEl.innerHTML = '';
+      statusEl.textContent = 'Step 1/2: Extracting pages...';
+      statusEl.className = 'muted';
+
+      try {
+        const extractResp = await fetch('/extract_pages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            pdf_url: pdfUrl,
+            page_numbers: pageNumbers,
+            max_auto_pages: 8
+          })
+        });
+
+        if (!extractResp.ok) {
+          throw new Error(`Extract failed (${extractResp.status})`);
+        }
+
+        const extracted = await extractResp.json();
+        const extractedPaths = extracted.map(p => p.image_path);
+
+        if (!extractedPaths.length) {
+          throw new Error('No pages were extracted.');
+        }
+
+        statusEl.textContent = 'Step 2/2: Building bundle...';
+
+        const buildResp = await fetch('/build_bundle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            bundle_name: bundleName,
+            extracted_page_paths: extractedPaths,
+            print_ratios: ['2x3', '3x4', '4x5', '11x14'],
+            cleanup_flags: {
+              crop_margins: true,
+              remove_border_artifacts: true,
+              autocontrast: true,
+              sharpen_line_art: true
+            }
+          })
+        });
+
+        if (!buildResp.ok) {
+          throw new Error(`Build failed (${buildResp.status})`);
+        }
+
+        const bundle = await buildResp.json();
+        statusEl.textContent = 'Bundle built successfully.';
+        statusEl.className = 'ok';
+
+        resultEl.innerHTML = `
+          <p><strong>Bundle ID:</strong> <code>${bundle.bundle_id}</code></p>
+          <p><strong>ZIP Path:</strong> <code>${bundle.local_path}</code></p>
+          <p><a href="${bundle.download_url}" target="_blank" rel="noopener">Download ZIP bundle</a></p>
+        `;
+      } catch (err) {
+        statusEl.textContent = err.message;
+        statusEl.className = 'err';
+      }
+    }
+
+    document.getElementById('buildBtn').addEventListener('click', buildBundle);
+  </script>
+</body>
+</html>

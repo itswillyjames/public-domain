@@ -1,0 +1,10 @@
+{
+  "bundle_name": "Foraminifera_Plate_Bundle",
+  "print_ratios": ["2x3", "3x4", "4x5", "11x14"],
+  "cleanup_flags": {
+    "crop_margins": true,
+    "remove_border_artifacts": true,
+    "autocontrast": true,
+    "sharpen_line_art": true
+  }
+}
